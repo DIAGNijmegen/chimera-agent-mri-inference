@@ -1,19 +1,14 @@
 # chimera-agent-mri-inference
 
 Containerized MRI feature extraction for the [CHIMERA Agent](https://chimera-agent.grand-challenge.org/)
-grand challenge (**Task 1**, MRI-only). Wraps the MEVIS-provided UNICORN / M3
-model: for each prostate-MRI case (`t2w` + `adc` + `hbv`, MetaImage `.mha`) it
-runs the encoder and saves an aggregated latent representation. Runs over a whole
-folder of cases in one invocation.
+grand challenge (**Task 1**, MRI-only). Wraps the UNICORN / M3 multi-task model:
+for each prostate-MRI case (`t2w` + `adc` + `hbv`, MetaImage `.mha`) it runs the
+encoder and saves an aggregated latent representation. Processes a whole folder
+of cases in one invocation.
 
 The image is built to be **portable and offline**: the model weights are baked
-in at build time, so it can be handed to partners (Karolinska) to run on their
-own data without network access or credentials at runtime.
-
-> **Status: DRAFT / not yet validated.** The script and Dockerfile have not been
-> run end-to-end yet (the authoring environment had no GPU + `mmm` install).
-> Tracked in Linear **WAT-33**, blocked on the latent-format decision in
-> **WAT-32**. See [Open items](#open-items) before relying on this.
+in at build time, so it can be handed to collaborators to run on their own data
+without network access or credentials at runtime.
 
 ## What it does
 
@@ -21,29 +16,26 @@ own data without network access or credentials at runtime.
 case dir (t2w.mha, adc.mha, hbv.mha)
   └─ load + resample adc/hbv onto the t2w grid
      └─ Tomo3DProcessor → slices → UNICORN encoder → squeezer → grouper
-        └─ aggregate across slices → latent → save (.pt [+ .json])
+        └─ aggregate across slices → latent → save (.pt + .json)
 ```
 
-The mask (`*_mask.mha`) shipped with some datasets (e.g. PI-CAI) is **ignored**;
-the model needs only `t2w`, `adc`, `hbv`.
+The mask (`*_mask.mha`) shipped with some datasets is **ignored**; the model
+needs only `t2w`, `adc`, `hbv`.
 
 ## Latent format
 
-The script currently emits **candidate** aggregations side-by-side so we can pick
-one for the full run (this is the WAT-32 decision):
+Each case is saved as a single latent vector: the **mean + max** aggregation
+across slices, concatenated into one `[2D]` tensor (1024-dim with the current
+encoder).
 
-| key                 | shape | status |
-|---------------------|-------|--------|
-| `mean`              | `[D]`  | ready |
-| `mean_max`          | `[2D]` | ready |
-| `mean_max_attended` | `[3D]` | **pending** — awaiting MEVIS on how UNICORN's "most attended" rep is derived from the grouper output |
-
-Once the format is locked, this collapses to a single saved tensor.
+> A third **most-attended** component — derived from the grouper's attention
+> weights — is under consideration but not yet wired in, pending confirmation
+> from the upstream model authors on how it is computed. See [Open items](#open-items).
 
 ## Prerequisites
 
 - NVIDIA GPU + driver, Docker, and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) (`--gpus all`).
-- Build host needs network access (to download the M3 weights at build time).
+- Build host needs network access (to download the model weights at build time).
 
 ## Build
 
@@ -52,9 +44,10 @@ docker build -t chimera-mri-inference .
 ```
 
 This downloads and bakes the UNICORN weights into the image (`ML_DATA_CACHE`),
-so the resulting image is self-contained. The weights come from a **public
-Google Drive URL** (confirmed in `mmm/api/M3Model.py`) — no token or credential
-is needed. The build verifies the download is a valid zip (Google Drive can
+so the resulting image is self-contained. The weights come from a **public URL**
+— no token or credential is needed. Building also accepts the upstream model
+license via `MMM_LICENSE_ACCEPTED` (set in the Dockerfile) — review the license
+before building. The build verifies the download is a valid zip (the host can
 occasionally serve an HTML interstitial for large files instead of the bytes;
 re-run the build if that check trips).
 
@@ -71,9 +64,10 @@ docker run --gpus all \
 
 `/input` is a folder of per-case subfolders (each with one `*t2w*`/`*adc*`/`*hbv*.mha`);
 a single case folder with the 3 files directly inside is just the n=1 case.
-Writes `/output/<case_id>_features.pt` per case. The run is **resumable** —
-cases whose output already exists are skipped (append `--overwrite` to recompute),
-and a failure on one case is logged and skipped rather than aborting the run.
+Writes `/output/<case_id>.pt` and `/output/<case_id>.json` per case. The run is
+**resumable** — cases whose `.pt` already exists are skipped (append `--overwrite`
+to recompute), and a failure on one case is logged and skipped rather than
+aborting the run.
 
 To run the script directly (outside Docker):
 
@@ -81,28 +75,37 @@ To run the script directly (outside Docker):
 python inference.py --input-dir /path/to/cases --out-dir /path/to/output
 ```
 
+Pass `--no-write-json` to emit only the `.pt` and skip the JSON.
+
 ## I/O contract
 
 - **Input:** `--input-dir` is searched recursively for `*t2w*.mha`; each one
   defines a case, and its `*adc*.mha` + `*hbv*.mha` must sit in the **same
   folder** (exactly one of each). `case_id` is the t2w filename with the modality
-  token stripped (PI-CAI: `<patient>_<study>`), falling back to the folder name.
+  token stripped (e.g. `<patient>_<study>`), falling back to the folder name.
   Any `*mask*.mha` is ignored.
-- **Output:** `<case_id>_features.pt` per case — a dict of the candidate tensors
-  above. `--write-json` additionally emits platform-compatible JSON (writer not
-  yet wired in; see Open items).
+- **Output:**
+  - `<case_id>.pt` — the mean+max latent as a bare `torch.Tensor`.
+  - `<case_id>.json` — the same vector in the challenge-platform schema
+    (`[{"title": "", "features": [...]}]`), written by default.
 
 ## Open items
 
-- [ ] **Validate by building + running** on a GPU box with the `mmm` env (WAT-32/33).
-- [ ] **Lock the latent format** (`mean` vs `mean_max` vs `mean_max_attended`) — WAT-32.
-- [ ] **Most-attended representation** — awaiting MEVIS; wire into `extract_features`.
-- [ ] **Pin remaining deps** (`pip freeze → requirements.lock.txt`) after first good build.
-- [ ] **Plug in the platform JSON writer** (`write_platform_json`, reused from the pathology dockers).
-- [x] ~~Built-in batch mode~~ — native: recursive case discovery, resumable, per-case failure isolation.
-- [x] ~~Confirm weight download is not credential-gated~~ — **public Google Drive, no auth** (`mmm/api/M3Model.py`).
-- [x] ~~Confirm a base image / official Dockerfile~~ — repo's only Dockerfile is a CPU dev/SSH base, **not** a runtime template; we use a `pytorch:*-cuda` base.
-- [x] ~~Pin top-level deps~~ — `mmm`/`m3-sdk` pinned to `1.6.3`; `m3-sdk` is mandatory but undeclared by mmm.
+- [ ] **Most-attended representation** — decide whether to add it, and if so wire
+  it into `extract_features`; pending upstream confirmation on how it's derived.
+- [ ] **Pin remaining deps** (`pip freeze → requirements.lock.txt`) for a fully
+  reproducible image.
+- [x] ~~Validate by building + running~~ — validated end-to-end on debug cases
+  (build + GPU run, `.pt` + `.json` produced).
+- [x] ~~Built-in batch mode~~ — native: recursive case discovery, resumable,
+  per-case failure isolation.
+- [x] ~~Lock the latent format~~ — single mean+max `[2D]` tensor.
+- [x] ~~Plug in the platform JSON writer~~ — wired in, on by default.
+- [x] ~~Confirm weights are not credential-gated~~ — **public URL, no auth**;
+  baked into the image at build time.
+- [x] ~~Confirm a base image~~ — the upstream repo's only Dockerfile is a CPU
+  dev/SSH base, **not** a runtime template; we use a `pytorch:*-cuda` base and
+  freeze its torch stack via `constraints.txt`.
 
 ## Layout
 
@@ -110,6 +113,7 @@ python inference.py --input-dir /path/to/cases --out-dir /path/to/output
 .
 ├── Dockerfile
 ├── requirements.txt
+├── constraints.txt   # freeze the base image's torch/torchvision/torchaudio
 ├── README.md
-└── inference.py   # cleaned from MEVIS's Colab export; batch feature extraction
+└── inference.py      # batch MRI feature extraction
 ```
