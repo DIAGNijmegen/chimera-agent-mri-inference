@@ -1,0 +1,14 @@
+# Pip constraints — freeze the base image's CUDA torch stack.
+#
+# pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime ships a matched, CUDA-built
+# triple. Installing mmm + its transitive deps otherwise lets pip move one of
+# these off the base version, which breaks the torch<->torchvision C++ ABI and
+# yields "RuntimeError: operator torchvision::nms does not exist" at import.
+#
+# Passed via `pip install -c constraints.txt`: constraints cap what may be
+# installed WITHOUT themselves requiring the package, so anything depending on
+# torch/torchvision resolves against these exact versions and the prebuilt
+# CUDA wheels already in the image are kept (no CPU-only re-download).
+torch==2.3.1
+torchvision==0.18.1
+torchaudio==2.3.1

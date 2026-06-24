@@ -21,6 +21,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WANDB_MODE=offline \
     # logfire is a hard dep imported at module load — keep it from phoning home.
     LOGFIRE_SEND_TO_LOGFIRE=false \
+    # mmm/__init__.py runs verify_license_accepted() at import time and raises
+    # unless this is set. Accepting the MEVIS license here applies to build+run.
+    # License: https://github.com/FraunhoferMEVIS/MedicalMultitaskModeling/blob/main/license.md
+    MMM_LICENSE_ACCEPTED="i accept" \
     # M3Model caches weights at $ML_DATA_CACHE/models/ on first instantiation
     # (else ~/.mmm/models/). Point it inside the image so the bake step persists.
     ML_DATA_CACHE=/opt/mmm-cache
@@ -32,8 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# constraints.txt freezes the base image's torch/torchvision/torchaudio so pip's
+# resolution of mmm's transitive deps can't bump them and break the torchvision
+# C++ ABI ("operator torchvision::nms does not exist").
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir -c constraints.txt -r requirements.txt
 
 # --- Bake the UNICORN weights into the image (offline runtime) -----------------
 # M3Model downloads the checkpoint on first instantiation. Confirmed against the
