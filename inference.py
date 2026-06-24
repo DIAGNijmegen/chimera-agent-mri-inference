@@ -3,18 +3,15 @@
 
 Cleaned from MEVIS's Colab export (Extract_features.ipynb). Keeps only the 3D
 MRI feature-extraction path: load prostate-MRI cases (t2w + adc + hbv .mha), run
-the UNICORN M3 encoder, and save candidate aggregated latents per case.
+the UNICORN M3 encoder, and save the aggregated latent per case.
 
 Batch by default. Point --input-dir at a folder of per-case subfolders, each
 holding one *t2w*/*adc*/*hbv*.mha — cases are discovered by recursively globbing
 *t2w*.mha (one case per t2w file; its adc/hbv are expected as siblings). A single
 case folder (the 3 files directly inside) is just the n=1 case of the same rule.
 
-Candidates emitted per case (the decision this script exists to inform — WAT-32):
-  - mean              [D]
-  - mean+max          [2D]
-  - mean+max+attended [3D]   (pending: MEVIS to confirm how "most attended" is
-                              derived from the grouper output — see TODO below)
+Output per case (WAT-32): a single mean+max latent [2D], saved as a bare
+torch.Tensor to <case_id>_features.pt.
 
 Deps (pip): medicalmultitaskmodeling m3-sdk SimpleITK itk monai numpy torch
 
@@ -27,6 +24,8 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
+import orjson
 import torch
 import torch.nn as nn
 
@@ -116,8 +115,8 @@ def build_input_batch(processed_case, processor: Tomo3DProcessor):
     return pipes.mtl_collate(slices)
 
 
-def extract_features(model, input_batch) -> dict:
-    """Run encoder -> squeezer -> grouper and aggregate across slices."""
+def extract_features(model, input_batch) -> torch.Tensor:
+    """Run encoder -> squeezer -> grouper and return the mean+max latent [2D]."""
     # Positional encoding for tomographic data (None for pathology).
     positions = [m["context"][0] for m in input_batch["meta"]]
     supercase_indices = torch.tensor([0 for _ in input_batch["meta"]])
@@ -127,38 +126,53 @@ def extract_features(model, input_batch) -> dict:
         hidden_vector = nn.Flatten(1)(model["squeezer"](feature_pyramid)[1])
 
         # Image transformer for 3D context across slices -> [n_slices, D].
-        hidden_vector, grouper_extra = model["grouper"](
+        hidden_vector, _ = model["grouper"](
             hidden_vector, supercase_indices, GroupUsage(), positions=positions
         )
 
         mean_rep = torch.mean(hidden_vector, dim=0)        # [D]
         max_rep = torch.max(hidden_vector, dim=0).values   # [D]
 
-        # TODO(most-attended): MEVIS to confirm how UNICORN's "most attended"
-        # representation is computed. It is likely recoverable from the grouper's
-        # second return value (`grouper_extra`, presumably attention weights) by
-        # selecting the slice with the highest attention. Until confirmed we emit
-        # only the mean and mean+max candidates.
-        most_attended_rep = None
-
-    features = {
-        "mean": mean_rep.cpu(),                                  # [D]
-        "mean_max": torch.cat([mean_rep, max_rep]).cpu(),        # [2D]
-    }
-    if most_attended_rep is not None:
-        features["mean_max_attended"] = torch.cat(
-            [mean_rep, max_rep, most_attended_rep]
-        ).cpu()                                                  # [3D]
-    return features
+    return torch.cat([mean_rep, max_rep]).cpu()            # [2D]
 
 
-def write_platform_json(features: dict, out_path: Path) -> None:
-    """Write the challenge-platform-compatible JSON.
+def sanitize_json_content(obj):
+    """Recursively coerce numpy scalars/arrays into JSON-native types.
 
-    TODO: drop in the existing JSON-writing code reused from the pathology
-    dockers so the output matches the platform's expected schema.
+    Ported from the pathology dockers' converter so the emitted JSON matches
+    the challenge platform's expected schema.
     """
-    raise NotImplementedError("Plug in existing platform JSON writer here.")
+    if isinstance(obj, dict):
+        return {k: sanitize_json_content(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple, np.ndarray)):
+        return [sanitize_json_content(v) for v in obj]
+    elif isinstance(obj, (str, int, bool, float)):
+        return obj
+    elif isinstance(obj, (np.float16, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(
+        obj,
+        (
+            np.uint8, np.uint16, np.uint32, np.uint64,
+            np.int8, np.int16, np.int32, np.int64,
+        ),
+    ):
+        return int(obj)
+    else:
+        return obj.__repr__()
+
+
+def write_platform_json(features: torch.Tensor, out_path: Path, title: str = "") -> None:
+    """Write the challenge-platform-compatible JSON for one case.
+
+    Schema (from the pathology dockers): a single-element list holding one
+    {"title", "features"} record, where features is the latent as a flat list
+    of floats.
+    """
+    output_dict = [{"title": title, "features": np.array(features)}]
+    content = sanitize_json_content(output_dict)
+    with open(out_path, "wb") as f:
+        f.write(orjson.dumps(content))
 
 
 def main():
@@ -182,8 +196,10 @@ def main():
     )
     parser.add_argument(
         "--write-json",
-        action="store_true",
-        help="Also write platform-compatible JSON (needs write_platform_json).",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write the platform-compatible JSON alongside the .pt "
+        "(default: on; pass --no-write-json to skip).",
     )
     args = parser.parse_args()
 
@@ -211,8 +227,7 @@ def main():
             input_batch = build_input_batch(processed, processor)
             features = extract_features(model, input_batch)
             torch.save(features, pt_path)
-            shapes = ", ".join(f"{k}{tuple(v.shape)}" for k, v in features.items())
-            print(f"{tag}: ok -> {pt_path.name}  ({shapes})")
+            print(f"{tag}: ok -> {pt_path.name}  ({tuple(features.shape)})")
             if args.write_json:
                 write_platform_json(features, args.out_dir / f"{case_id}_features.json")
             n_ok += 1

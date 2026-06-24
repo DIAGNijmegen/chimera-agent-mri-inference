@@ -15,3 +15,7 @@ m3-sdk==1.6.3          # mandatory but NOT declared by mmm's pyproject — impor
 # MetaImage (.mha) reading for our pipeline (not provided by mmm):
 SimpleITK
 itk
+
+# Platform-JSON serialization (challenge output schema), matching the pathology
+# dockers' pt->json converter:
+orjson
