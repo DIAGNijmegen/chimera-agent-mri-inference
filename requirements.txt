@@ -1,0 +1,17 @@
+# MEVIS MRI feature-extraction dependencies.
+#
+# Top-level pins confirmed against the official repo (mmm 1.6.3). The heavy ML
+# stack — torch, monai, timm, segmentation-models-pytorch, logfire, numpy,
+# opencv, etc. — is pulled in transitively by `medicalmultitaskmodeling`, so it
+# is intentionally not listed here. torch in particular is already provided by
+# the CUDA base image (>=2.1.2,<3) and must NOT be upgraded.
+#
+# After the first good GPU build, snapshot the full resolved set with
+# `pip freeze > requirements.lock.txt` for a reproducible handoff image.
+
+medicalmultitaskmodeling==1.6.3
+m3-sdk==1.6.3          # mandatory but NOT declared by mmm's pyproject — imported at load
+
+# MetaImage (.mha) reading for our pipeline (not provided by mmm):
+SimpleITK
+itk

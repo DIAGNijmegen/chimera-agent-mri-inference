@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- chimera-agent-mri-inference: data & model artifacts ---
+*.mha
+*.pt
+*.npy
+mri_features/
+data/
+weights/
