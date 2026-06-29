@@ -11,7 +11,7 @@ holding one *t2w*/*adc*/*hbv*.mha — cases are discovered by recursively globbi
 case folder (the 3 files directly inside) is just the n=1 case of the same rule.
 
 Output per case (WAT-32): a single mean+max latent [2D], saved as a bare
-torch.Tensor to <case_id>_features.pt.
+torch.Tensor to <case_id>.pt.
 
 Deps (pip): medicalmultitaskmodeling m3-sdk SimpleITK itk monai numpy torch
 
@@ -217,7 +217,7 @@ def main():
     n_ok = n_skip = n_fail = 0
     for i, (case_id, case_dir) in enumerate(cases, 1):
         tag = f"[{i}/{len(cases)}] {case_id}"
-        pt_path = args.out_dir / f"{case_id}_features.pt"
+        pt_path = args.out_dir / f"{case_id}.pt"
         if pt_path.exists() and not args.overwrite:
             print(f"{tag}: skip (exists)")
             n_skip += 1
@@ -229,7 +229,7 @@ def main():
             torch.save(features, pt_path)
             print(f"{tag}: ok -> {pt_path.name}  ({tuple(features.shape)})")
             if args.write_json:
-                write_platform_json(features, args.out_dir / f"{case_id}_features.json")
+                write_platform_json(features, args.out_dir / f"{case_id}.json")
             n_ok += 1
         except Exception as e:  # one bad case shouldn't abort a 1000-case run
             print(f"{tag}: FAIL -> {e}", file=sys.stderr)
