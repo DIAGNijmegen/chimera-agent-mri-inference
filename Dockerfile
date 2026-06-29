@@ -9,11 +9,6 @@
 # dependencies included"). It is NOT a runtime template — so we choose our own
 # CUDA base below. mmm requires torch>=2.1.2,<3 (pyproject) and Python>=3.10;
 # this base satisfies both and already ships torch 2.3.1, so pip won't upgrade it.
-#
-# STATUS: DRAFT — not yet validated by a real GPU build. Remaining before handoff:
-#   - run a real build + in-container smoke test on the WAT-32 example case
-#   - lock the latent format / wire in the most-attended rep (WAT-32, MEVIS)
-#   - pin remaining deps via pip freeze after the first good build
 FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
